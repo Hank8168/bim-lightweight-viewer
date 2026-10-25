@@ -45,6 +45,18 @@ function disposeObject(object: THREE.Object3D) {
 }
 
 function makeGeometry(part: IfcMeshPart) {
+  const vertexCount = part.positions.length / 3
+  if (
+    vertexCount < 1 || !Number.isInteger(vertexCount) ||
+    part.normals.length !== part.positions.length ||
+    part.indices.length < 3 || part.indices.length % 3 !== 0 ||
+    part.matrix.length !== 16
+  ) {
+    throw new Error('IFC 幾何資料長度不一致，無法建立 3D 網格。')
+  }
+  for (const index of part.indices) {
+    if (index >= vertexCount) throw new Error('IFC 幾何索引超出頂點範圍。')
+  }
   const geometry = new THREE.BufferGeometry()
   geometry.setAttribute('position', new THREE.BufferAttribute(part.positions, 3))
   geometry.setAttribute('normal', new THREE.BufferAttribute(part.normals, 3))
@@ -107,39 +119,54 @@ export const ViewerCanvas = forwardRef<ViewerCanvasHandle, ViewerCanvasProps>(
           }
 
           const group = new THREE.Group() as IfcElementGroup
-          const info: IfcElementInfo = {
-            expressId: message.expressId,
-            guid: message.guid,
-            name: message.name,
-            ifcType: message.ifcType,
-            attributes: message.attributes,
-          }
-          onElement(info)
-          group.name = message.name
-          group.userData.ifcElement = info
+          try {
+            const info: IfcElementInfo = {
+              expressId: message.expressId,
+              guid: message.guid,
+              name: message.name,
+              ifcType: message.ifcType,
+              attributes: message.attributes,
+            }
+            group.name = message.name
+            group.userData.ifcElement = info
 
-          for (const part of message.parts) {
-            const material = new THREE.MeshStandardMaterial({
-              color: new THREE.Color(part.color[0], part.color[1], part.color[2]),
-              opacity: part.color[3],
-              transparent: part.color[3] < 0.999,
-              roughness: 0.85,
-              metalness: 0,
-              side: THREE.DoubleSide,
-            })
-            const mesh = new THREE.Mesh(makeGeometry(part), material)
-            mesh.castShadow = false
-            mesh.receiveShadow = true
-            group.add(mesh)
+            for (const part of message.parts) {
+              const geometry = makeGeometry(part)
+              const material = new THREE.MeshStandardMaterial({
+                color: new THREE.Color(part.color[0], part.color[1], part.color[2]),
+                opacity: part.color[3],
+                transparent: part.color[3] < 0.999,
+                roughness: 0.85,
+                metalness: 0,
+                side: THREE.DoubleSide,
+              })
+              const mesh = new THREE.Mesh(geometry, material)
+              mesh.castShadow = false
+              mesh.receiveShadow = true
+              group.add(mesh)
+            }
+            onElement(info)
+            api.elements.set(message.expressId, group)
+            api.modelRoot.add(group)
+          } catch (error) {
+            disposeObject(group)
+            worker.terminate()
+            workerRef.current = null
+            api.clearModel()
+            onError(error instanceof Error ? error.message : 'IFC 幾何資料無法顯示。')
           }
-          api.elements.set(message.expressId, group)
-          api.modelRoot.add(group)
         }
         worker.onerror = (event) => {
           worker.terminate()
           workerRef.current = null
           api.clearModel()
           onError(event.message || 'IFC 背景解析器發生錯誤。')
+        }
+        worker.onmessageerror = () => {
+          worker.terminate()
+          workerRef.current = null
+          api.clearModel()
+          onError('IFC 背景解析器傳回了無法讀取的資料，請重試或檢查檔案。')
         }
         worker.postMessage({ type: 'load', fileName, buffer }, [buffer])
       },
@@ -216,12 +243,17 @@ export const ViewerCanvas = forwardRef<ViewerCanvasHandle, ViewerCanvasProps>(
         const bounds = new THREE.Box3().setFromObject(modelRoot)
         if (bounds.isEmpty()) return
         const center = bounds.getCenter(new THREE.Vector3())
-        const size = bounds.getSize(new THREE.Vector3())
-        const largestDimension = Math.max(size.x, size.y, size.z, 0.1)
-        const distance = largestDimension / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov * 0.5))) * 1.35
-        camera.position.set(center.x + distance, center.y + distance * 0.72, center.z + distance)
-        camera.near = Math.max(distance / 10_000, 0.01)
-        camera.far = Math.max(distance * 100, 1_000)
+        const sphere = bounds.getBoundingSphere(new THREE.Sphere())
+        const verticalHalfFov = THREE.MathUtils.degToRad(camera.fov * 0.5)
+        const horizontalHalfFov = Math.atan(Math.tan(verticalHalfFov) * Math.max(camera.aspect, 0.01))
+        const limitingHalfFov = Math.min(verticalHalfFov, horizontalHalfFov)
+        const radius = Math.max(sphere.radius, 0.05)
+        const distance = radius / Math.sin(limitingHalfFov) * 1.2
+        const viewDirection = new THREE.Vector3(1, 0.72, 1).normalize()
+        camera.position.copy(center).addScaledVector(viewDirection, distance)
+        // A tight depth range preserves depth-buffer precision on building-scale models.
+        camera.near = Math.max(distance - radius * 1.5, 0.01)
+        camera.far = distance + radius * 2
         camera.updateProjectionMatrix()
         controls.target.copy(center)
         controls.update()
