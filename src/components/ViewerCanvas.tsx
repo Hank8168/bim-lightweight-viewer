@@ -10,6 +10,8 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
 import { TransformControls, type TransformControlsMode } from 'three/addons/controls/TransformControls.js'
 import type { IfcMeshPart, IfcWorkerResponse } from '../ifc/messages'
 import { findGltfResourcePath, getGltfFilePath } from '../gltf/resources'
+import type { IfcElementTransform, TransformSnapshot } from '../project/project'
+import type { FileWithPath } from '../project/project'
 
 export type IfcElementInfo = {
   expressId: number
@@ -35,11 +37,16 @@ export type ViewerSelection =
 
 export type ViewerCanvasHandle = {
   loadIfc(buffer: ArrayBuffer, fileName: string): void
-  loadGltf(files: File[]): Promise<ImportedModelInfo>
+  loadGltf(files: FileWithPath[], restore?: { info: ImportedModelInfo; transform: TransformSnapshot }): Promise<ImportedModelInfo>
   selectIfcElement(expressId: number): void
-  selectModel(id: string): void
+  selectModel(id: string): boolean
   setTransformMode(mode: TransformControlsMode | null): void
   deleteSelectedModel(): void
+  clearImportedModels(): void
+  clearIfc(): void
+  getIfcElementTransforms(): IfcElementTransform[]
+  applyIfcElementTransforms(transforms: IfcElementTransform[]): { applied: number; missing: number }
+  getImportedModelSnapshots(): Array<{ info: ImportedModelInfo; files: FileWithPath[]; transform: TransformSnapshot }>
   resetView(): void
 }
 
@@ -119,12 +126,16 @@ export const ViewerCanvas = forwardRef<ViewerCanvasHandle, ViewerCanvasProps>(
       assetRoot: THREE.Group
       setSelected: (object: THREE.Object3D | null) => void
       elements: Map<number, IfcElementGroup>
-      importedModels: Map<string, { info: ImportedModelInfo; root: ImportedModelRoot }>
+      importedModels: Map<string, { info: ImportedModelInfo; root: ImportedModelRoot; files: FileWithPath[] }>
       selectElement: (expressId: number) => void
-      selectModel: (id: string) => void
+      selectModel: (id: string) => boolean
       setTransformMode: (mode: TransformControlsMode | null) => void
       deleteSelectedModel: () => void
-      loadGltf: (files: File[]) => Promise<ImportedModelInfo>
+      clearImportedModels: () => void
+      getIfcElementTransforms: () => IfcElementTransform[]
+      applyIfcElementTransforms: (transforms: IfcElementTransform[]) => { applied: number; missing: number }
+      getImportedModelSnapshots: () => Array<{ info: ImportedModelInfo; files: FileWithPath[]; transform: TransformSnapshot }>
+      loadGltf: (files: FileWithPath[], restore?: { info: ImportedModelInfo; transform: TransformSnapshot }) => Promise<ImportedModelInfo>
       fitModel: () => void
       clearModel: () => void
     } | null>(null)
@@ -218,10 +229,10 @@ export const ViewerCanvas = forwardRef<ViewerCanvasHandle, ViewerCanvasProps>(
         }
         worker.postMessage({ type: 'load', fileName, buffer }, [buffer])
       },
-      loadGltf(files) {
+      loadGltf(files, restore) {
         const api = apiRef.current
         if (!api) return Promise.reject(new Error('3D 場景尚未準備完成，請稍後再試。'))
-        return api.loadGltf(files)
+        return api.loadGltf(files, restore)
       },
       resetView() {
         apiRef.current?.fitModel()
@@ -230,13 +241,33 @@ export const ViewerCanvas = forwardRef<ViewerCanvasHandle, ViewerCanvasProps>(
         apiRef.current?.selectElement(expressId)
       },
       selectModel(id) {
-        apiRef.current?.selectModel(id)
+        return apiRef.current?.selectModel(id) ?? false
       },
       setTransformMode(mode) {
         apiRef.current?.setTransformMode(mode)
       },
       deleteSelectedModel() {
         apiRef.current?.deleteSelectedModel()
+      },
+      clearImportedModels() {
+        apiRef.current?.clearImportedModels()
+      },
+      clearIfc() {
+        const api = apiRef.current
+        if (!api) return
+        workerRef.current?.terminate()
+        workerRef.current = null
+        api.clearModel()
+        api.setSelected(null)
+      },
+      getIfcElementTransforms() {
+        return apiRef.current?.getIfcElementTransforms() ?? []
+      },
+      applyIfcElementTransforms(transforms) {
+        return apiRef.current?.applyIfcElementTransforms(transforms) ?? { applied: 0, missing: transforms.length }
+      },
+      getImportedModelSnapshots() {
+        return apiRef.current?.getImportedModelSnapshots() ?? []
       },
     }), [onComplete, onElement, onError, onProgress])
 
@@ -283,7 +314,7 @@ export const ViewerCanvas = forwardRef<ViewerCanvasHandle, ViewerCanvasProps>(
       assetRoot.name = 'Imported GLTF models'
       scene.add(assetRoot)
       const elements = new Map<number, IfcElementGroup>()
-      const importedModels = new Map<string, { info: ImportedModelInfo; root: ImportedModelRoot }>()
+      const importedModels = new Map<string, { info: ImportedModelInfo; root: ImportedModelRoot; files: FileWithPath[] }>()
       let selectionBox: THREE.BoxHelper | null = null
       let selectedObject: THREE.Object3D | null = null
       let activeTransformMode: TransformControlsMode | null = null
@@ -307,7 +338,7 @@ export const ViewerCanvas = forwardRef<ViewerCanvasHandle, ViewerCanvasProps>(
         const ifcElement = object?.userData.ifcElement as IfcElementInfo | undefined
         const importedModel = object?.userData.importedModel as ImportedModelInfo | undefined
         onSelect(ifcElement ? { kind: 'ifc', element: ifcElement } : importedModel ? { kind: 'model', model: importedModel } : null)
-        if (importedModel && activeTransformMode && object) {
+        if ((importedModel || ifcElement) && activeTransformMode && object) {
           transformControls.setMode(activeTransformMode)
           transformControls.attach(object)
         } else {
@@ -354,17 +385,27 @@ export const ViewerCanvas = forwardRef<ViewerCanvasHandle, ViewerCanvasProps>(
       }
 
       const selectElement = (expressId: number) => {
-        setSelected(elements.get(expressId) ?? null)
+        const element = elements.get(expressId) ?? null
+        setSelected(element)
+        if (element) fitObject(element)
       }
 
       const selectModel = (id: string) => {
-        setSelected(importedModels.get(id)?.root ?? null)
+        if (!id) {
+          setSelected(null)
+          return true
+        }
+        const model = importedModels.get(id)
+        if (!model) return false
+        setSelected(model.root)
+        fitObject(model.root)
+        return true
       }
 
       const setTransformMode = (mode: TransformControlsMode | null) => {
         activeTransformMode = mode
-        const isModelSelected = Boolean(selectedObject?.userData.importedModel)
-        if (mode && isModelSelected && selectedObject) {
+        const isEditableObject = Boolean(selectedObject?.userData.importedModel || selectedObject?.userData.ifcElement)
+        if (mode && isEditableObject && selectedObject) {
           transformControls.setMode(mode)
           transformControls.attach(selectedObject)
         } else {
@@ -385,7 +426,54 @@ export const ViewerCanvas = forwardRef<ViewerCanvasHandle, ViewerCanvasProps>(
         onModelsChange([...importedModels.values()].map(({ info: item }) => item))
       }
 
-      const loadGltf = async (files: File[]) => {
+      const clearImportedModels = () => {
+        if (selectedObject?.userData.importedModel) setSelected(null)
+        for (const model of importedModels.values()) {
+          assetRoot.remove(model.root)
+          disposeObject(model.root)
+        }
+        importedModels.clear()
+        onModelsChange([])
+      }
+
+      const readTransform = (object: THREE.Object3D): TransformSnapshot => ({
+        position: [object.position.x, object.position.y, object.position.z],
+        rotation: [object.rotation.x, object.rotation.y, object.rotation.z],
+        scale: [object.scale.x, object.scale.y, object.scale.z],
+      })
+
+      const getIfcElementTransforms = (): IfcElementTransform[] => [...elements.values()].map((object) => {
+        const info = object.userData.ifcElement!
+        return { expressId: info.expressId, guid: info.guid, transform: readTransform(object) }
+      })
+
+      const applyIfcElementTransforms = (transforms: IfcElementTransform[]) => {
+        const byGuid = new Map([...elements.values()].map((object) => [object.userData.ifcElement!.guid, object]))
+        let applied = 0
+        let missing = 0
+        for (const saved of transforms) {
+          const object = saved.guid ? byGuid.get(saved.guid) : elements.get(saved.expressId)
+          if (!object) {
+            missing += 1
+            continue
+          }
+          object.position.fromArray(saved.transform.position)
+          object.rotation.set(...saved.transform.rotation)
+          object.scale.fromArray(saved.transform.scale)
+          object.updateMatrixWorld(true)
+          applied += 1
+        }
+        selectionBox?.update()
+        return { applied, missing }
+      }
+
+      const getImportedModelSnapshots = () => [...importedModels.values()].map(({ info, root, files }) => ({
+        info,
+        files,
+        transform: readTransform(root),
+      }))
+
+      const loadGltf = async (files: FileWithPath[], restore?: { info: ImportedModelInfo; transform: TransformSnapshot }) => {
         const modelFiles = files.filter((file) => /\.(glb|gltf)$/i.test(file.name))
         if (modelFiles.length !== 1) {
           throw new Error(modelFiles.length === 0
@@ -418,9 +506,8 @@ export const ViewerCanvas = forwardRef<ViewerCanvasHandle, ViewerCanvasProps>(
             throw new Error('檢視器已關閉，模型載入已取消。')
           }
 
-          const id = crypto.randomUUID()
-          const info: ImportedModelInfo = {
-            id,
+          const info: ImportedModelInfo = restore?.info ?? {
+            id: crypto.randomUUID(),
             name: mainFile.name.replace(/\.(glb|gltf)$/i, ''),
             fileName: mainFile.name,
             format: mainFile.name.toLowerCase().endsWith('.glb') ? 'GLB' : 'GLTF',
@@ -428,9 +515,14 @@ export const ViewerCanvas = forwardRef<ViewerCanvasHandle, ViewerCanvasProps>(
           const root = new THREE.Group() as ImportedModelRoot
           root.name = info.name
           root.userData.importedModel = info
+          if (restore) {
+            root.position.fromArray(restore.transform.position)
+            root.rotation.set(...restore.transform.rotation)
+            root.scale.fromArray(restore.transform.scale)
+          }
           root.add(gltf.scene)
           assetRoot.add(root)
-          importedModels.set(id, { info, root })
+          importedModels.set(info.id, { info, root, files })
           setSelected(root)
           fitObject(root)
           onModelsChange([...importedModels.values()].map(({ info: item }) => item))
@@ -442,7 +534,9 @@ export const ViewerCanvas = forwardRef<ViewerCanvasHandle, ViewerCanvasProps>(
 
       const viewerApi = {
         scene, camera, controls, modelRoot, assetRoot, setSelected, elements, importedModels,
-        selectElement, selectModel, setTransformMode, deleteSelectedModel, loadGltf, fitModel, clearModel,
+        selectElement, selectModel, setTransformMode, deleteSelectedModel, clearImportedModels,
+        getIfcElementTransforms, applyIfcElementTransforms, getImportedModelSnapshots,
+        loadGltf, fitModel, clearModel,
       }
       apiRef.current = viewerApi
 
@@ -454,6 +548,9 @@ export const ViewerCanvas = forwardRef<ViewerCanvasHandle, ViewerCanvasProps>(
       transformControls.addEventListener('mouseUp', onTransformMouseUp)
       let pointerStart: { x: number; y: number } | null = null
       const onPointerDown = (event: PointerEvent) => {
+        const rect = renderer.domElement.getBoundingClientRect()
+        pointer.set(((event.clientX - rect.left) / rect.width) * 2 - 1, -((event.clientY - rect.top) / rect.height) * 2 + 1)
+        raycaster.setFromCamera(pointer, camera)
         pointerStart = { x: event.clientX, y: event.clientY }
       }
       const onPointerUp = (event: PointerEvent) => {

@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
-    "test": "node --experimental-strip-types --test tests/gltf-resources.test.mjs && node tests/ifc-smoke.mjs && node tests/gltf-smoke.mjs",
+    "test": "node --experimental-strip-types --test tests/project.test.mjs tests/gltf-resources.test.mjs && node tests/ifc-smoke.mjs && node tests/gltf-smoke.mjs",
     "preview": "vite preview"
   },
   "dependencies": {

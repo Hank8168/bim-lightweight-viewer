@@ -1,0 +1,302 @@
+{
+  "format": "bim-lightweight-viewer-project",
+  "version": 1,
+  "projectName": "Building-Architecture",
+  "ifc": {
+    "resource": {
+      "path": "Building-Architecture.ifc",
+      "fileName": "Building-Architecture.ifc",
+      "size": 142325,
+      "sha256": "8790a1e193e82b8e7e7f337ec2633cd40f2120590317a1443503a25b079e2e80"
+    },
+    "schema": "IFC4",
+    "elements": [
+      {
+        "expressId": 53,
+        "guid": "3zR0BOEcLADRKln4HYporH",
+        "transform": {
+          "position": [
+            0,
+            0,
+            0
+          ],
+          "rotation": [
+            0,
+            0,
+            0
+          ],
+          "scale": [
+            1,
+            1,
+            1
+          ]
+        }
+      },
+      {
+        "expressId": 261,
+        "guid": "0ZTBBPo6f6bxqV2K7Oelrq",
+        "transform": {
+          "position": [
+            0,
+            -7.696294595068686,
+            -7.568495129230628
+          ],
+          "rotation": [
+            0,
+            0,
+            -0.6029570563929039
+          ],
+          "scale": [
+            1,
+            1.6087646898176562,
+            1
+          ]
+        }
+      },
+      {
+        "expressId": 285,
+        "guid": "12UVOn4wvAJPMUExKdZLb8",
+        "transform": {
+          "position": [
+            0,
+            0,
+            0
+          ],
+          "rotation": [
+            0,
+            0,
+            0
+          ],
+          "scale": [
+            1,
+            1,
+            1
+          ]
+        }
+      },
+      {
+        "expressId": 303,
+        "guid": "1yP7NInQz5uQzbiOpVFFJr",
+        "transform": {
+          "position": [
+            0,
+            0,
+            0
+          ],
+          "rotation": [
+            0,
+            0,
+            0
+          ],
+          "scale": [
+            1,
+            1,
+            1
+          ]
+        }
+      },
+      {
+        "expressId": 158,
+        "guid": "1AQAupaRP1txwK1AGiN61V",
+        "transform": {
+          "position": [
+            0,
+            0,
+            0
+          ],
+          "rotation": [
+            0,
+            0,
+            0
+          ],
+          "scale": [
+            1,
+            1,
+            1
+          ]
+        }
+      },
+      {
+        "expressId": 182,
+        "guid": "3wdauVJT5Fx9drrREiDqA$",
+        "transform": {
+          "position": [
+            0,
+            0,
+            0
+          ],
+          "rotation": [
+            0,
+            0,
+            0
+          ],
+          "scale": [
+            1,
+            1,
+            1
+          ]
+        }
+      },
+      {
+        "expressId": 201,
+        "guid": "0OfZwWc8j9QP5uX8xPTxDH",
+        "transform": {
+          "position": [
+            0,
+            0,
+            0
+          ],
+          "rotation": [
+            0,
+            0,
+            0
+          ],
+          "scale": [
+            1,
+            1,
+            1
+          ]
+        }
+      },
+      {
+        "expressId": 228,
+        "guid": "0Q5LjisRjDwhFSOc_WQjlF",
+        "transform": {
+          "position": [
+            0,
+            0,
+            0
+          ],
+          "rotation": [
+            0,
+            0,
+            0
+          ],
+          "scale": [
+            1,
+            1,
+            1
+          ]
+        }
+      },
+      {
+        "expressId": 116,
+        "guid": "2e9pghUJbBqR4jTInsONQT",
+        "transform": {
+          "position": [
+            0,
+            0,
+            0
+          ],
+          "rotation": [
+            0,
+            0,
+            0
+          ],
+          "scale": [
+            1,
+            1,
+            1
+          ]
+        }
+      },
+      {
+        "expressId": 319,
+        "guid": "3_4VN63S96DfWiJjgG8j1C",
+        "transform": {
+          "position": [
+            0,
+            0,
+            0
+          ],
+          "rotation": [
+            0,
+            0,
+            0
+          ],
+          "scale": [
+            1,
+            1,
+            1
+          ]
+        }
+      },
+      {
+        "expressId": 337,
+        "guid": "2F44QMqSH3TOkM$SZoqCBe",
+        "transform": {
+          "position": [
+            0,
+            0,
+            0
+          ],
+          "rotation": [
+            0,
+            0,
+            0
+          ],
+          "scale": [
+            1,
+            1,
+            1
+          ]
+        }
+      },
+      {
+        "expressId": 355,
+        "guid": "3Fit2Fad92zf2f6aWdJtF5",
+        "transform": {
+          "position": [
+            0,
+            0,
+            0
+          ],
+          "rotation": [
+            0,
+            0,
+            0
+          ],
+          "scale": [
+            1,
+            1,
+            1
+          ]
+        }
+      }
+    ]
+  },
+  "models": [
+    {
+      "id": "8d6c9e63-d1a9-48b6-827e-d4d045fa247c",
+      "name": "BasePalmTree01",
+      "fileName": "BasePalmTree01.glb",
+      "format": "GLB",
+      "mainResourcePath": "BasePalmTree01.glb",
+      "resources": [
+        {
+          "path": "BasePalmTree01.glb",
+          "fileName": "BasePalmTree01.glb",
+          "size": 13356104,
+          "sha256": "194f24384f3d2648939cea27ad5883cf227fca8e457b88b322dc98b51b19f559"
+        }
+      ],
+      "transform": {
+        "position": [
+          -1.044198859308377,
+          4.781128958057815,
+          10.034305765756574
+        ],
+        "rotation": [
+          -1.1135276029335854,
+          -0.11393927609758954,
+          -1.5149117961760499
+        ],
+        "scale": [
+          0.7044960879160584,
+          0.7044299073910287,
+          0.7044960879160584
+        ]
+      }
+    }
+  ]
+}

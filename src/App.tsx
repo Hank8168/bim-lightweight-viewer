@@ -8,6 +8,8 @@ import type {
   ViewerCanvasHandle,
 } from './components/ViewerCanvas'
 import type { TransformControlsMode } from 'three/addons/controls/TransformControls.js'
+import { describeProjectResource, parseProjectDocument, resolveProjectResources, type FileWithPath, type IfcElementTransform, type ProjectDocument, type ProjectResource } from './project/project'
+import { getGltfFilePath } from './gltf/resources'
 import './App.css'
 
 type LoadState = 'empty' | 'loading' | 'ready' | 'error'
@@ -20,13 +22,18 @@ const tools = [
 ] as const
 
 type GltfStatus = { phase: 'idle' | 'loading' | 'success' | 'error'; message: string }
-
 function App() {
   const viewerRef = useRef<ViewerCanvasHandle>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const gltfInputRef = useRef<HTMLInputElement>(null)
   const gltfFolderInputRef = useRef<HTMLInputElement>(null)
+  const projectInputRef = useRef<HTMLInputElement>(null)
+  const projectResourcesInputRef = useRef<HTMLInputElement>(null)
+  const projectResourceFolderInputRef = useRef<HTMLInputElement>(null)
   const elementsRef = useRef<IfcElementInfo[]>([])
+  const ifcSourceRef = useRef<File | null>(null)
+  const pendingIfcTransformsRef = useRef<IfcElementTransform[] | null>(null)
+  const pendingProjectRef = useRef<ProjectDocument | null>(null)
   const [activeTool, setActiveTool] = useState('select')
   const [loadState, setLoadState] = useState<LoadState>('empty')
   const [model, setModel] = useState<IfcLoadResult | null>(null)
@@ -37,9 +44,13 @@ function App() {
   const [error, setError] = useState('')
   const [gltfStatus, setGltfStatus] = useState<GltfStatus>({ phase: 'idle', message: '' })
   const [draggingFile, setDraggingFile] = useState(false)
+  const [projectName, setProjectName] = useState('未命名專案')
+  const [projectMessage, setProjectMessage] = useState('')
+  const [pendingProject, setPendingProject] = useState<ProjectDocument | null>(null)
 
   useEffect(() => {
     gltfFolderInputRef.current?.setAttribute('webkitdirectory', '')
+    projectResourceFolderInputRef.current?.setAttribute('webkitdirectory', '')
   }, [])
 
   const onProgress = useCallback((completed: number, total: number) => {
@@ -53,18 +64,26 @@ function App() {
     setElements(elementsRef.current)
     setSelected(null)
     setLoadState('ready')
+    const savedTransforms = pendingIfcTransformsRef.current
+    if (savedTransforms) {
+      const restored = viewerRef.current?.applyIfcElementTransforms(savedTransforms) ?? { applied: 0, missing: savedTransforms.length }
+      viewerRef.current?.resetView()
+      pendingIfcTransformsRef.current = null
+      setProjectMessage(`IFC 已還原 ${restored.applied} 個元件變換${restored.missing ? `；${restored.missing} 個識別碼未找到` : ''}。`)
+    }
   }, [])
   const onModelsChange = useCallback((models: ImportedModelInfo[]) => {
     setAssets(models)
     if (models.length === 0) setGltfStatus({ phase: 'idle', message: '' })
   }, [])
   const onError = useCallback((message: string) => {
+    pendingIfcTransformsRef.current = null
     setError(message)
     setLoadState('error')
   }, [])
   const onSelect = useCallback((selection: ViewerSelection) => {
     setSelected(selection)
-    if (selection?.kind !== 'model') setActiveTool('select')
+    if (!selection) setActiveTool('select')
   }, [])
 
   const loadGltfFiles = async (files: File[]) => {
@@ -77,6 +96,7 @@ function App() {
       setActiveTool('select')
       viewerRef.current?.setTransformMode(null)
       setGltfStatus({ phase: 'success', message: `已載入 ${imported.fileName}（${imported.format}）` })
+      setProjectName((current) => current === '未命名專案' ? imported.name : current)
     } catch (cause) {
       setGltfStatus({
         phase: 'error',
@@ -95,13 +115,16 @@ function App() {
     viewerRef.current?.setTransformMode(mode === 'select' ? null : mode as TransformControlsMode)
   }
 
-  const loadIfcFile = async (file: File) => {
+  const loadIfcFile = async (file: File, restoreTransforms?: IfcElementTransform[]) => {
     if (!file.name.toLowerCase().endsWith('.ifc')) {
       setError('目前只接受 .ifc 檔案。')
       setLoadState('error')
       return
     }
     setError('')
+    ifcSourceRef.current = file
+    pendingIfcTransformsRef.current = restoreTransforms ?? null
+    if (restoreTransforms === undefined) setProjectName(file.name.replace(/\.ifc$/i, ''))
     setModel(null)
     setSelected(null)
     setElements([])
@@ -122,6 +145,135 @@ function App() {
     if (fileInputRef.current) fileInputRef.current.value = ''
   }
 
+  const saveProject = useCallback(async () => {
+    try {
+      setProjectMessage('正在整理場景變換並核對模型來源…')
+      const ifcTransforms = viewerRef.current?.getIfcElementTransforms() ?? []
+      const imported = viewerRef.current?.getImportedModelSnapshots() ?? []
+      if (model && !ifcSourceRef.current) throw new Error('目前 IFC 原始檔案資訊遺失，請重新載入 IFC 後再儲存。')
+
+      const ifcResource = model && ifcSourceRef.current
+        ? await describeProjectResource(ifcSourceRef.current)
+        : null
+      const projectModels = await Promise.all(imported.map(async ({ info, files, transform }) => {
+        const resources = await Promise.all(files.map((file) => describeProjectResource(file)))
+        const mainFile = files.find((file) => file.name === info.fileName && /\.(glb|gltf)$/i.test(file.name))
+        if (!mainFile) throw new Error(`找不到「${info.fileName}」的主模型檔，無法保存此專案。`)
+        return {
+          ...info,
+          mainResourcePath: getGltfFilePath(mainFile),
+          resources,
+          transform,
+        }
+      }))
+      const document: ProjectDocument = {
+        format: 'bim-lightweight-viewer-project',
+        version: 1,
+        projectName,
+        ifc: model && ifcResource ? {
+          resource: ifcResource,
+          schema: model.schema,
+          elements: ifcTransforms,
+        } : null,
+        models: projectModels,
+      }
+      const contents = JSON.stringify(document, null, 2)
+      const blob = new Blob([contents], { type: 'application/json' })
+      const downloadUrl = URL.createObjectURL(blob)
+      const anchor = window.document.createElement('a')
+      anchor.href = downloadUrl
+      anchor.download = `${projectName === '未命名專案' ? 'bim-project' : projectName.replace(/\.(bimproj\.json|json)$/i, '')}.bimproj.json`
+      anchor.click()
+      window.setTimeout(() => URL.revokeObjectURL(downloadUrl), 1000)
+      setProjectMessage(`專案已下載：${anchor.download}`)
+    } catch (cause) {
+      setProjectMessage(cause instanceof Error ? `儲存失敗：${cause.message}` : '專案儲存失敗。')
+    }
+  }, [model, projectName])
+
+  const restoreProject = async (document: ProjectDocument, resolved: Map<ProjectResource, FileWithPath>) => {
+    const ifcFile = document.ifc ? resolved.get(document.ifc.resource) : undefined
+    if (document.ifc && !ifcFile) throw new Error('找不到專案要求的 IFC 檔案。')
+    viewerRef.current?.clearImportedModels()
+    viewerRef.current?.clearIfc()
+    setModel(null)
+    setElements([])
+    elementsRef.current = []
+    setSelected(null)
+    setLoadState('empty')
+    setProjectName(document.projectName)
+    pendingIfcTransformsRef.current = null
+    ifcSourceRef.current = null
+
+    if (ifcFile && document.ifc) await loadIfcFile(ifcFile, document.ifc.elements)
+    for (const savedModel of document.models) {
+      const modelFiles = savedModel.resources.map((resource) => resolved.get(resource)).filter((file): file is FileWithPath => Boolean(file))
+      const mainFile = resolved.get(savedModel.resources.find((resource) => resource.path === savedModel.mainResourcePath)!)
+      if (!mainFile || !modelFiles.includes(mainFile)) throw new Error(`缺少 GLTF 主模型「${savedModel.fileName}」或其相依檔案。`)
+      const imported = await viewerRef.current?.loadGltf(modelFiles, {
+        info: { id: savedModel.id, name: savedModel.name, fileName: savedModel.fileName, format: savedModel.format },
+        transform: savedModel.transform,
+      })
+      if (!imported) throw new Error(`無法還原「${savedModel.fileName}」。`)
+    }
+    setAssets(document.models.map(({ id, name, fileName, format }) => ({ id, name, fileName, format })))
+    if (!ifcFile && !document.models.length) viewerRef.current?.resetView()
+    setProjectMessage(`專案「${document.projectName}」已開啟；IFC 元件變換會在模型解析完成後套用。`)
+  }
+
+  const openProjectFile = async (file?: File) => {
+    if (!file) return
+    if (projectInputRef.current) projectInputRef.current.value = ''
+    try {
+      const document = parseProjectDocument(await file.text())
+      pendingProjectRef.current = document
+      setPendingProject(document)
+      setProjectName(document.projectName)
+      const hasResources = Boolean(document.ifc) || document.models.length > 0
+      if (!hasResources) {
+        await restoreProject(document, new Map())
+        pendingProjectRef.current = null
+        setPendingProject(null)
+      } else {
+        const count = (document.ifc ? 1 : 0) + document.models.reduce((total, item) => total + item.resources.length, 0)
+        setProjectMessage(`專案格式有效。請重新選取 ${count} 個原始模型／相依資源檔以還原幾何。`)
+      }
+    } catch (cause) {
+      setProjectMessage(cause instanceof Error ? `開啟失敗：${cause.message}` : '無法開啟專案檔。')
+    }
+  }
+
+  const selectProjectResources = async (input: HTMLInputElement) => {
+    const files = Array.from(input.files ?? []) as FileWithPath[]
+    input.value = ''
+    const document = pendingProjectRef.current
+    if (!document || !files.length) return
+    try {
+      setProjectMessage('正在核對所選模型檔案…')
+      const result = await resolveProjectResources(document, files)
+      if (result.missing.length) {
+        setProjectMessage(`仍缺少或內容不符：${result.missing.join('、')}。請重新選取原始檔案。`)
+        return
+      }
+      await restoreProject(document, result.resolved)
+      pendingProjectRef.current = null
+      setPendingProject(null)
+    } catch (cause) {
+      setProjectMessage(cause instanceof Error ? `還原失敗：${cause.message}` : '專案資源還原失敗。')
+    }
+  }
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
+        event.preventDefault()
+        void saveProject()
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [saveProject])
+
   return (
     <main className="app-shell">
       <header className="topbar">
@@ -134,15 +286,38 @@ function App() {
         </div>
         <div className="project-title">
           <span className={`status-dot ${loadState === 'error' || gltfStatus.phase === 'error' ? 'error-dot' : ''}`} />
-          <span>{model?.name ?? (assets.length ? `${assets.length} 個新增模型` : '未命名專案')}</span>
-          <span className="unsaved-label">{model ? 'IFC 模型' : assets.length ? '3D 模型' : '尚未儲存'}</span>
+          <span>{projectName !== '未命名專案' ? projectName : model?.name ?? (assets.length ? `${assets.length} 個新增模型` : '未命名專案')}</span>
+          <span className="unsaved-label">{model ? 'IFC 場景' : assets.length ? '3D 場景' : '本機專案'}</span>
         </div>
         <div className="topbar-actions">
-          <button className="button button-quiet" type="button" disabled title="專案 JSON 還原將於後續階段加入">開啟專案</button>
+          <button className="button button-quiet" type="button" onClick={() => projectInputRef.current?.click()}>開啟專案</button>
           <button className="button button-primary" type="button" onClick={() => fileInputRef.current?.click()}>匯入 IFC</button>
           <button className="button button-model" type="button" onClick={() => gltfInputRef.current?.click()} title="可多選 .gltf 的 .bin 與貼圖相依檔">匯入 GLB／GLTF</button>
           <button className="button button-quiet folder-import" type="button" onClick={() => gltfFolderInputRef.current?.click()} title="選取含有 .gltf 與外部資源的資料夾">GLTF 資料夾</button>
-          <button className="button button-save" type="button" disabled title="專案 JSON 儲存將於後續階段加入">儲存專案</button>
+          <button className="button button-save" type="button" onClick={() => void saveProject()} title="Ctrl+S">儲存專案</button>
+          <input
+            accept=".json,.bimproj.json,application/json"
+            className="visually-hidden"
+            onChange={(event) => void openProjectFile(event.currentTarget.files?.[0])}
+            ref={projectInputRef}
+            type="file"
+          />
+          <input
+            accept=".ifc,.glb,.gltf,.bin,.png,.jpg,.jpeg,.webp,.ktx2,application/octet-stream,image/*"
+            className="visually-hidden"
+            multiple
+            onChange={(event) => void selectProjectResources(event.currentTarget)}
+            ref={projectResourcesInputRef}
+            type="file"
+          />
+          <input
+            accept=".ifc,.glb,.gltf,.bin,.png,.jpg,.jpeg,.webp,.ktx2,application/octet-stream,image/*"
+            className="visually-hidden"
+            multiple
+            onChange={(event) => void selectProjectResources(event.currentTarget)}
+            ref={projectResourceFolderInputRef}
+            type="file"
+          />
           <input
             accept=".ifc,application/x-step"
             className="visually-hidden"
@@ -247,7 +422,11 @@ function App() {
                   <button
                     className={`object-row ${selected?.kind === 'model' && selected.model.id === asset.id ? 'active' : ''}`}
                     key={asset.id}
-                    onClick={() => { viewerRef.current?.selectModel(asset.id); changeTransformMode('select') }}
+                    onClick={() => {
+                      const selectedFromScene = viewerRef.current?.selectModel(asset.id) ?? false
+                      if (!selectedFromScene) setProjectMessage(`無法選取「${asset.fileName}」：場景中的模型識別碼不存在。`)
+                      changeTransformMode('select')
+                    }}
                     type="button"
                     title={`${asset.format} · ${asset.fileName}`}
                   >
@@ -275,7 +454,7 @@ function App() {
                 <button
                   aria-label={tool.label}
                   className={`tool-button ${activeTool === tool.id ? 'selected' : ''}`}
-                  disabled={tool.id === 'select' ? !model && assets.length === 0 : selected?.kind !== 'model'}
+                  disabled={tool.id === 'select' ? !model && assets.length === 0 : !selected}
                   key={tool.id}
                   onClick={() => changeTransformMode(tool.id)}
                   title={tool.id === 'select' ? '選取 IFC 元件或新增模型' : `在選取 GLB／GLTF 後使用${tool.label}控制器`}
@@ -308,6 +487,17 @@ function App() {
               else selectFile(files[0])
             }}
           >
+            {projectMessage && (
+              <div className="project-message" role={projectMessage.includes('失敗') || projectMessage.includes('缺少') || projectMessage.includes('不符') ? 'alert' : 'status'} aria-live="polite">
+                <span>{projectMessage}</span>
+                {pendingProject && (
+                  <div className="project-resource-actions">
+                    <button type="button" onClick={() => projectResourcesInputRef.current?.click()}>選取資源檔案</button>
+                    <button type="button" onClick={() => projectResourceFolderInputRef.current?.click()}>選取資源資料夾</button>
+                  </div>
+                )}
+              </div>
+            )}
             <ViewerCanvas
               onComplete={onComplete}
               onElement={onElement}

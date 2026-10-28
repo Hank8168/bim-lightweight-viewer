@@ -76,6 +76,10 @@
 .delete-model-button:not(:disabled) { color: #bd5c5c; background: #fff5f4; }
 .gltf-status { position: absolute; z-index: 5; top: 13px; right: 14px; max-width: min(440px,calc(100% - 28px)); padding: 9px 12px; border: 1px solid #d8e9df; border-radius: 7px; color: #438161; background: #f5fbf7ed; box-shadow: 0 3px 12px #314a3b12; font-size: 10px; }
 .gltf-status-error { border-color: #f0d7d5; color: #a24c4c; background: #fff8f7ed; }
+.project-message { position: absolute; z-index: 6; top: 13px; left: 14px; display: flex; flex-direction: column; gap: 8px; width: min(440px,calc(100% - 28px)); padding: 10px 12px; border: 1px solid #d9e5eb; border-radius: 7px; color: #516874; background: #ffffffed; box-shadow: 0 3px 12px #314a3b12; font-size: 10px; line-height: 1.5; }
+.project-message[role="alert"] { border-color: #f0d7d5; color: #a24c4c; background: #fff8f7ed; }
+.project-resource-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.project-message button { border: 1px solid #cbdfe9; border-radius: 5px; padding: 5px 8px; color: #347aa6; background: #f4fafd; font-size: 9px; font-weight: 600; }
 .toolbar-divider { height: 17px; width: 1px; background: #e3e8eb; margin: 0 4px; }
 .viewport-frame { position: relative; flex: 1; min-height: 340px; overflow: hidden; }
 .viewport-frame.dragging-file::after { content: ''; position: absolute; z-index: 3; inset: 10px; border: 2px dashed #4698d0; border-radius: 8px; pointer-events: none; }
