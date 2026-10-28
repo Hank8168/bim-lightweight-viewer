@@ -12,6 +12,9 @@ dist
 dist-ssr
 *.local
 
+# Downloaded binary sample assets are intentionally kept local to avoid large commits.
+tests/assets/*.glb
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

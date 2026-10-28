@@ -6,7 +6,10 @@ import {
 } from 'react'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
+import { TransformControls, type TransformControlsMode } from 'three/addons/controls/TransformControls.js'
 import type { IfcMeshPart, IfcWorkerResponse } from '../ifc/messages'
+import { findGltfResourcePath, getGltfFilePath } from '../gltf/resources'
 
 export type IfcElementInfo = {
   expressId: number
@@ -18,29 +21,68 @@ export type IfcElementInfo = {
 
 export type IfcLoadResult = { name: string; schema: string; elementCount: number }
 
+export type ImportedModelInfo = {
+  id: string
+  name: string
+  fileName: string
+  format: 'GLB' | 'GLTF'
+}
+
+export type ViewerSelection =
+  | { kind: 'ifc'; element: IfcElementInfo }
+  | { kind: 'model'; model: ImportedModelInfo }
+  | null
+
 export type ViewerCanvasHandle = {
   loadIfc(buffer: ArrayBuffer, fileName: string): void
+  loadGltf(files: File[]): Promise<ImportedModelInfo>
   selectIfcElement(expressId: number): void
+  selectModel(id: string): void
+  setTransformMode(mode: TransformControlsMode | null): void
+  deleteSelectedModel(): void
   resetView(): void
 }
 
 type ViewerCanvasProps = {
   onProgress: (completed: number, total: number) => void
   onElement: (element: IfcElementInfo) => void
+  onModelsChange: (models: ImportedModelInfo[]) => void
   onComplete: (result: IfcLoadResult) => void
   onError: (message: string) => void
-  onSelect: (element: IfcElementInfo | null) => void
+  onSelect: (selection: ViewerSelection) => void
 }
 
+type ImportedModelRoot = THREE.Group & { userData: { importedModel?: ImportedModelInfo } }
 type IfcElementGroup = THREE.Group & { userData: { ifcElement?: IfcElementInfo } }
 
 function disposeObject(object: THREE.Object3D) {
+  const geometries = new Set<THREE.BufferGeometry>()
+  const materials = new Set<THREE.Material>()
+  const textures = new Set<THREE.Texture>()
   object.traverse((child) => {
-    if (child instanceof THREE.Mesh || child instanceof THREE.Line) {
-      child.geometry.dispose()
-      const materials = Array.isArray(child.material) ? child.material : [child.material]
-      materials.forEach((material) => material.dispose())
+    if (child instanceof THREE.Mesh || child instanceof THREE.Line || child instanceof THREE.Points) {
+      geometries.add(child.geometry)
+      const childMaterials = Array.isArray(child.material) ? child.material : [child.material]
+      childMaterials.forEach((material) => materials.add(material))
     }
+  })
+  for (const material of materials) {
+    for (const value of Object.values(material)) {
+      if (value instanceof THREE.Texture) textures.add(value)
+    }
+    material.dispose()
+  }
+  for (const geometry of geometries) geometry.dispose()
+  for (const texture of textures) {
+    const image = texture.source.data
+    if (typeof ImageBitmap !== 'undefined' && image instanceof ImageBitmap) image.close()
+    texture.dispose()
+  }
+}
+
+function parseGltf(loader: GLTFLoader, data: ArrayBuffer, resourcePath: string) {
+  return new Promise<Awaited<ReturnType<GLTFLoader['parseAsync']>>>((resolve, reject) => {
+    loader.parse(data, resourcePath, resolve, reject)
   })
 }
 
@@ -67,16 +109,22 @@ function makeGeometry(part: IfcMeshPart) {
 }
 
 export const ViewerCanvas = forwardRef<ViewerCanvasHandle, ViewerCanvasProps>(
-  function ViewerCanvas({ onProgress, onElement, onComplete, onError, onSelect }, ref) {
+  function ViewerCanvas({ onProgress, onElement, onModelsChange, onComplete, onError, onSelect }, ref) {
     const hostRef = useRef<HTMLDivElement>(null)
     const apiRef = useRef<{
       scene: THREE.Scene
       camera: THREE.PerspectiveCamera
       controls: OrbitControls
       modelRoot: THREE.Group
-      setSelected: (group: IfcElementGroup | null) => void
+      assetRoot: THREE.Group
+      setSelected: (object: THREE.Object3D | null) => void
       elements: Map<number, IfcElementGroup>
+      importedModels: Map<string, { info: ImportedModelInfo; root: ImportedModelRoot }>
       selectElement: (expressId: number) => void
+      selectModel: (id: string) => void
+      setTransformMode: (mode: TransformControlsMode | null) => void
+      deleteSelectedModel: () => void
+      loadGltf: (files: File[]) => Promise<ImportedModelInfo>
       fitModel: () => void
       clearModel: () => void
     } | null>(null)
@@ -91,7 +139,7 @@ export const ViewerCanvas = forwardRef<ViewerCanvasHandle, ViewerCanvasProps>(
         }
         workerRef.current?.terminate()
         api.clearModel()
-        onSelect(null)
+        api.setSelected(null)
 
         const worker = new Worker(new URL('../ifc/ifc.worker.ts', import.meta.url), {
           type: 'module',
@@ -170,13 +218,27 @@ export const ViewerCanvas = forwardRef<ViewerCanvasHandle, ViewerCanvasProps>(
         }
         worker.postMessage({ type: 'load', fileName, buffer }, [buffer])
       },
+      loadGltf(files) {
+        const api = apiRef.current
+        if (!api) return Promise.reject(new Error('3D 場景尚未準備完成，請稍後再試。'))
+        return api.loadGltf(files)
+      },
       resetView() {
         apiRef.current?.fitModel()
       },
       selectIfcElement(expressId) {
         apiRef.current?.selectElement(expressId)
       },
-    }), [onComplete, onElement, onError, onProgress, onSelect])
+      selectModel(id) {
+        apiRef.current?.selectModel(id)
+      },
+      setTransformMode(mode) {
+        apiRef.current?.setTransformMode(mode)
+      },
+      deleteSelectedModel() {
+        apiRef.current?.deleteSelectedModel()
+      },
+    }), [onComplete, onElement, onError, onProgress])
 
     useEffect(() => {
       const host = hostRef.current
@@ -200,6 +262,12 @@ export const ViewerCanvas = forwardRef<ViewerCanvasHandle, ViewerCanvasProps>(
       controls.screenSpacePanning = true
       controls.update()
 
+      const transformControls = new TransformControls(camera, renderer.domElement)
+      scene.add(transformControls.getHelper())
+      transformControls.addEventListener('dragging-changed', (event) => {
+        controls.enabled = !event.value
+      })
+
       const grid = new THREE.GridHelper(100, 50, '#aab7c2', '#d2dbe2')
       grid.position.y = -0.015
       scene.add(grid)
@@ -211,27 +279,44 @@ export const ViewerCanvas = forwardRef<ViewerCanvasHandle, ViewerCanvasProps>(
       const modelRoot = new THREE.Group()
       modelRoot.name = 'IFC model'
       scene.add(modelRoot)
+      const assetRoot = new THREE.Group()
+      assetRoot.name = 'Imported GLTF models'
+      scene.add(assetRoot)
       const elements = new Map<number, IfcElementGroup>()
+      const importedModels = new Map<string, { info: ImportedModelInfo; root: ImportedModelRoot }>()
       let selectionBox: THREE.BoxHelper | null = null
+      let selectedObject: THREE.Object3D | null = null
+      let activeTransformMode: TransformControlsMode | null = null
+      let transformPointerActive = false
+      let isDisposed = false
 
-      const setSelected = (group: IfcElementGroup | null) => {
+      const setSelected = (object: THREE.Object3D | null) => {
         if (selectionBox) {
           scene.remove(selectionBox)
           disposeObject(selectionBox)
           selectionBox = null
         }
-        if (group) {
-          selectionBox = new THREE.BoxHelper(group, '#1684d4')
+        selectedObject = object
+        if (object) {
+          selectionBox = new THREE.BoxHelper(object, '#1684d4')
           selectionBox.material.depthTest = false
           selectionBox.material.transparent = true
           selectionBox.material.opacity = 0.95
           scene.add(selectionBox)
         }
-        onSelect(group?.userData.ifcElement ?? null)
+        const ifcElement = object?.userData.ifcElement as IfcElementInfo | undefined
+        const importedModel = object?.userData.importedModel as ImportedModelInfo | undefined
+        onSelect(ifcElement ? { kind: 'ifc', element: ifcElement } : importedModel ? { kind: 'model', model: importedModel } : null)
+        if (importedModel && activeTransformMode && object) {
+          transformControls.setMode(activeTransformMode)
+          transformControls.attach(object)
+        } else {
+          transformControls.detach()
+        }
       }
 
       const clearModel = () => {
-        setSelected(null)
+        if (selectedObject?.userData.ifcElement) setSelected(null)
         elements.clear()
         for (const child of [...modelRoot.children]) {
           modelRoot.remove(child)
@@ -240,7 +325,15 @@ export const ViewerCanvas = forwardRef<ViewerCanvasHandle, ViewerCanvasProps>(
       }
 
       const fitModel = () => {
-        const bounds = new THREE.Box3().setFromObject(modelRoot)
+        const bounds = new THREE.Box3().setFromObject(modelRoot).union(new THREE.Box3().setFromObject(assetRoot))
+        fitBounds(bounds)
+      }
+
+      const fitObject = (object: THREE.Object3D) => {
+        fitBounds(new THREE.Box3().setFromObject(object))
+      }
+
+      const fitBounds = (bounds: THREE.Box3) => {
         if (bounds.isEmpty()) return
         const center = bounds.getCenter(new THREE.Vector3())
         const sphere = bounds.getBoundingSphere(new THREE.Sphere())
@@ -263,18 +356,112 @@ export const ViewerCanvas = forwardRef<ViewerCanvasHandle, ViewerCanvasProps>(
       const selectElement = (expressId: number) => {
         setSelected(elements.get(expressId) ?? null)
       }
-      apiRef.current = {
-        scene, camera, controls, modelRoot, setSelected, elements, selectElement, fitModel, clearModel,
+
+      const selectModel = (id: string) => {
+        setSelected(importedModels.get(id)?.root ?? null)
       }
+
+      const setTransformMode = (mode: TransformControlsMode | null) => {
+        activeTransformMode = mode
+        const isModelSelected = Boolean(selectedObject?.userData.importedModel)
+        if (mode && isModelSelected && selectedObject) {
+          transformControls.setMode(mode)
+          transformControls.attach(selectedObject)
+        } else {
+          transformControls.detach()
+        }
+      }
+
+      const deleteSelectedModel = () => {
+        const info = selectedObject?.userData.importedModel as ImportedModelInfo | undefined
+        if (!info) return
+        const model = importedModels.get(info.id)
+        if (!model) return
+        transformControls.detach()
+        setSelected(null)
+        assetRoot.remove(model.root)
+        importedModels.delete(info.id)
+        disposeObject(model.root)
+        onModelsChange([...importedModels.values()].map(({ info: item }) => item))
+      }
+
+      const loadGltf = async (files: File[]) => {
+        const modelFiles = files.filter((file) => /\.(glb|gltf)$/i.test(file.name))
+        if (modelFiles.length !== 1) {
+          throw new Error(modelFiles.length === 0
+            ? '請選取一個 .glb 或 .gltf 模型檔。'
+            : '一次請選取一個 .glb 或 .gltf 模型檔；相依檔可和模型一起多選。')
+        }
+        const mainFile = modelFiles[0]
+        const paths = files.map(getGltfFilePath)
+        if (new Set(paths).size !== paths.length) throw new Error('選取的 GLTF 資源路徑重複，請改用資料夾匯入。')
+
+        const objectUrls = new Map<string, string>()
+        try {
+          files.forEach((file, index) => objectUrls.set(paths[index], URL.createObjectURL(file)))
+          const manager = new THREE.LoadingManager()
+          manager.setURLModifier((requestedUrl) => {
+            if (/^(?:data:|blob:|https?:\/\/)/i.test(requestedUrl)) return requestedUrl
+            const resourcePath = findGltfResourcePath(requestedUrl, [...objectUrls.keys()])
+            const objectUrl = resourcePath ? objectUrls.get(resourcePath) : undefined
+            if (!objectUrl) {
+              throw new Error(`找不到 GLTF 外部資源「${requestedUrl}」。請同時選取 .bin／貼圖檔，或改用「GLTF 資料夾」匯入。`)
+            }
+            return objectUrl
+          })
+          const loader = new GLTFLoader(manager)
+          const filePath = getGltfFilePath(mainFile)
+          const directory = filePath.includes('/') ? filePath.slice(0, filePath.lastIndexOf('/') + 1) : ''
+          const gltf = await parseGltf(loader, await mainFile.arrayBuffer(), directory)
+          if (isDisposed || !apiRef.current) {
+            disposeObject(gltf.scene)
+            throw new Error('檢視器已關閉，模型載入已取消。')
+          }
+
+          const id = crypto.randomUUID()
+          const info: ImportedModelInfo = {
+            id,
+            name: mainFile.name.replace(/\.(glb|gltf)$/i, ''),
+            fileName: mainFile.name,
+            format: mainFile.name.toLowerCase().endsWith('.glb') ? 'GLB' : 'GLTF',
+          }
+          const root = new THREE.Group() as ImportedModelRoot
+          root.name = info.name
+          root.userData.importedModel = info
+          root.add(gltf.scene)
+          assetRoot.add(root)
+          importedModels.set(id, { info, root })
+          setSelected(root)
+          fitObject(root)
+          onModelsChange([...importedModels.values()].map(({ info: item }) => item))
+          return info
+        } finally {
+          for (const url of objectUrls.values()) URL.revokeObjectURL(url)
+        }
+      }
+
+      const viewerApi = {
+        scene, camera, controls, modelRoot, assetRoot, setSelected, elements, importedModels,
+        selectElement, selectModel, setTransformMode, deleteSelectedModel, loadGltf, fitModel, clearModel,
+      }
+      apiRef.current = viewerApi
 
       const raycaster = new THREE.Raycaster()
       const pointer = new THREE.Vector2()
+      const onTransformMouseDown = () => { transformPointerActive = true }
+      const onTransformMouseUp = () => { window.setTimeout(() => { transformPointerActive = false }, 0) }
+      transformControls.addEventListener('mouseDown', onTransformMouseDown)
+      transformControls.addEventListener('mouseUp', onTransformMouseUp)
       let pointerStart: { x: number; y: number } | null = null
       const onPointerDown = (event: PointerEvent) => {
         pointerStart = { x: event.clientX, y: event.clientY }
       }
       const onPointerUp = (event: PointerEvent) => {
         if (!pointerStart) return
+        if (transformPointerActive || transformControls.axis !== null) {
+          pointerStart = null
+          return
+        }
         const moved = Math.hypot(event.clientX - pointerStart.x, event.clientY - pointerStart.y)
         pointerStart = null
         if (moved > 4) return
@@ -284,14 +471,14 @@ export const ViewerCanvas = forwardRef<ViewerCanvasHandle, ViewerCanvasProps>(
           -((event.clientY - rect.top) / rect.height) * 2 + 1,
         )
         raycaster.setFromCamera(pointer, camera)
-        const hit = raycaster.intersectObjects(modelRoot.children, true)[0]
+        const hit = raycaster.intersectObjects([...modelRoot.children, ...assetRoot.children], true)[0]
         if (!hit) {
           setSelected(null)
           return
         }
         let target: THREE.Object3D | null = hit.object
-        while (target && !('ifcElement' in target.userData)) target = target.parent
-        setSelected((target as IfcElementGroup | null) ?? null)
+        while (target && !('ifcElement' in target.userData) && !('importedModel' in target.userData)) target = target.parent
+        setSelected(target)
       }
       renderer.domElement.addEventListener('pointerdown', onPointerDown)
       renderer.domElement.addEventListener('pointerup', onPointerUp)
@@ -316,19 +503,23 @@ export const ViewerCanvas = forwardRef<ViewerCanvasHandle, ViewerCanvasProps>(
       resizeObserver.observe(host)
 
       return () => {
+        isDisposed = true
         workerRef.current?.terminate()
         workerRef.current = null
         window.cancelAnimationFrame(frameId)
         resizeObserver.disconnect()
         renderer.domElement.removeEventListener('pointerdown', onPointerDown)
         renderer.domElement.removeEventListener('pointerup', onPointerUp)
+        transformControls.removeEventListener('mouseDown', onTransformMouseDown)
+        transformControls.removeEventListener('mouseUp', onTransformMouseUp)
+        transformControls.dispose()
         controls.dispose()
         disposeObject(scene)
         renderer.dispose()
         renderer.domElement.remove()
         apiRef.current = null
       }
-    }, [onSelect])
+    }, [onModelsChange, onSelect])
 
     return <div className="viewer-canvas" ref={hostRef} aria-label="3D 模型檢視畫布" />
   },

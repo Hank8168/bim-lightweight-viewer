@@ -1,5 +1,11 @@
 # React + TypeScript + Vite
 
+## GLB／GLTF 匯入
+
+使用「匯入 GLB／GLTF」選取單一 `.glb`／`.gltf` 模型；`.gltf` 的 `.bin` 與貼圖可在同一檔案選擇器中一併多選，或用「GLTF 資料夾」選取整個資料夾以保留子目錄路徑。缺少或無法唯一辨識的外部資源會顯示錯誤。模型可從左側「新增模型」清單或 3D 畫布選取，再用工具列移動、旋轉、縮放；刪除按鈕只會移除所選新增模型。
+
+主要驗收模型為 `tests/assets/BasePalmTree01.glb`。資產來源及 CC0 登錄資訊見 [tests/assets/ASSET_SOURCES.md](tests/assets/ASSET_SOURCES.md)；二進位測試檔因約 13 MB 而由 `.gitignore` 排除，測試前需先取得該檔案。
+
 This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
 
 Currently, two official plugins are available:
