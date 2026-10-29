@@ -1,28 +1,60 @@
 # BIM Lightweight Viewer
 
-純瀏覽器端的BIM 3D檢視器，使用React、TypeScript、Vite、Three.js與 web-ifc，IFC 由 Web Worker/WASM 在瀏覽器解析，GLB／GLTF 使用 Three.js GLTFLoader載入，專案不需要自建後端。
+純瀏覽器端的BIM 3D檢視器，使用React、TypeScript、Vite、Three.js與 web-ifc，IFC 由Web Worker/WASM 在瀏覽器解析，GLB／GLTF使用Three.js GLTFLoader載入，專案不需要自建後端
 
 ## 功能與驗收狀態
 
-以下互動功能依使用者親自在瀏覽器操作的回報，記為「使用者實測通過」；這與自動化測試分開記錄。
-
-- IFC 元件可在畫布中選取及高亮；點空白處可取消選取，物件清單與屬性面板同步更新。
-- Orbit 相機可旋轉、平移及縮放。
-- 可使用工具操作選取物件的移動、旋轉及縮放。
-- 專案可儲存及重新開啟，Ctrl+S 可執行儲存。
-- 使用者已實測 GLB 變換後以 Ctrl+S 儲存，再重新開啟並選取相同 GLB；位置、旋轉及縮放比例正確還原。
-- GLB／GLTF 可匯入、選取、移動、旋轉、縮放及刪除；刪除後清單會更新。
+- IFC元件可在畫布中選取及高亮；點空白處可取消選取，物件清單與屬性面板同步更新
+- Orbit相機可旋轉、平移及縮放
+- 可使用工具操作選取物件的移動、旋轉及縮放
+- 專案可儲存及重新開啟，Ctrl+S可執行儲存
+- 實測GLB變換後以Ctrl+S儲存，再重新開啟並選取相同GLB；位置、旋轉及縮放比例正確還原
+- GLB／GLTF可匯入、選取、移動、旋轉、縮放及刪除，刪除後清單會更新
 
 ## 安裝與啟動
 
-需求：Node.js 與 npm。此工作目錄使用 Node.js v24.22.0、npm 11.19.1；本次已成功執行 `npm ci` 重建相依套件。
+**環境需求：** Node.js與npm，本專案開發環境使用Node.js v24.22.0、npm 11.19.1
+
+### 1. 安裝相依套件
+
+在終端機切換至專案根目錄，執行：
 
 ```bash
 npm ci
+```
+
+此指令會依據 `package-lock.json` 安裝專案所需的相依套件。本次開發已成功執行 `npm ci`，完成相依套件安裝
+
+### 2. 啟動開發伺服器
+
+```bash
 npm run dev
 ```
 
-開啟Vite顯示的本機網址，Windows PowerShell可使用 `npm.cmd ci`、`npm.cmd run dev`。可用 `npm run build` 建置正式版、`npm run preview`預覽建置結果。
+啟動成功後，開啟 Vite 顯示的本機網址，即可在瀏覽器中使用BIM檢視器
+
+**Windows PowerShell 注意事項：** 若執行 `npm` 時出現PowerShell執行原則錯誤，可改用以下指令：
+
+```powershell
+npm.cmd ci
+npm.cmd run dev
+```
+
+### 3. 建置與預覽正式版
+
+建置正式版：
+
+```bash
+npm run build
+```
+
+預覽建置結果：
+
+```bash
+npm run preview
+```
+
+若在 Windows PowerShell 遇到相同的執行原則問題，也可以將上述指令中的 `npm` 改為 `npm.cmd`
 
 ## 操作方式
 
