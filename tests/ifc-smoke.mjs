@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { IfcAPI } from 'web-ifc'
 
-const fixturePath = resolve('tests/fixtures/Building-Architecture.ifc')
+const fixturePath = resolve('tests/Building-Architecture.ifc')
 const bytes = await readFile(fixturePath)
 const api = new IfcAPI()
 let modelId

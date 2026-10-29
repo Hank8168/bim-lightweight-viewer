@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 
-const path = resolve('tests/assets/BasePalmTree01.glb')
+const path = resolve('tests/BasePalmTree01.glb')
 const buffer = await readFile(path)
 assert.equal(buffer.toString('ascii', 0, 4), 'glTF', 'downloaded sample should have the GLB magic header')
 assert.equal(buffer.readUInt32LE(4), 2, 'downloaded sample should use GLB 2.0')
